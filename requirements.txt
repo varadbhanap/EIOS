@@ -1,0 +1,27 @@
+# EIOS - Python dependencies
+# Install with: pip install -r requirements.txt
+#
+# This file is pinned to versions confirmed working during development.
+# Update it (and note the change in the build log) whenever a new
+# dependency is added, so all 4 team members stay on identical versions.
+# This exact problem (an unpinned "mcp" package silently breaking) is
+# what caused a real issue earlier in this build, see Build Log Section 6.
+
+pandas==2.2.3
+numpy==1.26.4
+scikit-learn==1.5.2
+statsmodels==0.14.4
+lightgbm==4.5.0
+fastmcp>=3.4.7
+
+# Added when the agent (Component 4) is built:
+# langchain
+# langchain-anthropic
+# anthropic
+
+# Added when the policy retrieval tool is built:
+# pymupdf
+
+# Added when the FastAPI wrapper (UI integration) is built:
+# fastapi
+# uvicorn
