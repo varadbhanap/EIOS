@@ -1,0 +1,35 @@
+# Data files - large, regenerable via load_data.py, shouldn't live in git.
+# Each team member downloads the raw CSVs themselves and runs load_data.py.
+data/raw/*.csv
+data/*.db
+
+# Trained model files - regenerable via train_risk_model.py
+models/*.txt
+models/*.json
+
+# Policy/report PDFs and images - large binary files, share via team drive
+# instead of git if they grow beyond a few MB
+docs/*.pdf
+visuals/**/*.jpg
+visuals/**/*.png
+
+# Python environment and cache
+venv/
+__pycache__/
+*.pyc
+.venv/
+
+# Secrets - NEVER commit API keys
+.env
+*.env
+
+# Session logs from main.py - local run history, not source code
+logs/*.jsonl
+
+# OS clutter
+.DS_Store
+Thumbs.db
+
+# Editor folders
+.vscode/
+.idea/

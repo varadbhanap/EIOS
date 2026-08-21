@@ -13,10 +13,17 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import json
+import re
+import os
+import pymupdf  # was 'import fitz', PyMuPDF's older import name, now deprecated
 import lightgbm as lgb
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from statsmodels.tsa.arima.model import ARIMA
+
+DOCS_DIR = "docs"
 
 DB_PATH = "data/enterprise_data.db"
 
@@ -28,18 +35,76 @@ def get_connection():
 # ---------------------------------------------------------------------------
 # 1. SQL querying
 # ---------------------------------------------------------------------------
-def run_query(sql: str) -> list[dict]:
+def _cap_result_size(records: list, max_chars: int = 3000) -> dict:
+    """
+    Defensive guard against oversized query results. This exists because
+    the agent once wrote a SELECT la.*, bc.* join, which multiplied rows
+    (one applicant can have many bureau records) and returned a result
+    large enough to exceed the LLM's per-request token limit, crashing
+    the agent mid-run. Rather than relying on the agent to always write
+    narrow queries (its judgment isn't 100% reliable), this caps output
+    size at the tool level so oversized results can never reach the LLM,
+    regardless of what SQL was written.
+    """
+    total_rows = len(records)
+    serialized = json.dumps(records, default=str)
+
+    if len(serialized) <= max_chars:
+        return {"records": records, "row_count": total_rows, "truncated": False}
+
+    trimmed = records
+    while trimmed and len(json.dumps(trimmed, default=str)) > max_chars:
+        trimmed = trimmed[: max(1, len(trimmed) // 2)]
+
+    return {
+        "records": trimmed,
+        "row_count": total_rows,
+        "truncated": True,
+        "note": (
+            f"Result had {total_rows} rows and was too large, showing only "
+            f"the first {len(trimmed)}. Select specific columns instead of "
+            f"*, or add a LIMIT clause, to get complete results."
+        ),
+    }
+
+
+def run_query(sql: str) -> dict:
     """
     Executes any SQL query against the enterprise database and returns
-    the results as a list of dictionaries (easy for an AI agent to read
-    and easy to convert to JSON later).
+    the results. Always returns a dict with a 'records' key (a list of
+    rows). If the result is too large, it will be truncated and a 'note'
+    explaining this will be included, in that case, write a narrower
+    query (select specific columns, or add a LIMIT clause) instead of
+    assuming the truncated data is complete.
     """
     conn = get_connection()
     try:
         df = pd.read_sql_query(sql, conn)
-        return df.to_dict(orient="records")
+        records = df.to_dict(orient="records")
     finally:
         conn.close()
+
+    return _cap_result_size(records)
+
+
+def get_table_schema(table: str) -> dict:
+    """
+    Returns the real column names and types for a given table. Use this
+    whenever you're unsure of exact column names, guessing a column name
+    that doesn't exist will cause a SQL error, checking first is faster
+    and more reliable than guessing and retrying.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.execute(f"PRAGMA table_info({table})")
+        columns = [{"name": row[1], "type": row[2]} for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+    if not columns:
+        return {"error": f"Table '{table}' not found."}
+
+    return {"table": table, "columns": columns}
 
 
 # ---------------------------------------------------------------------------
@@ -251,12 +316,90 @@ def predict_default_risk(sk_id_curr: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 6. Policy document retrieval (RAG)
+# ---------------------------------------------------------------------------
+_doc_chunks = None
+_doc_sources = None
+_vectorizer = None
+_doc_vectors = None
+
+
+def _load_documents():
+    """
+    Loads and indexes every PDF in docs/ once, then reuses the index.
+    Each PDF is split into paragraph-level chunks, policy sections are
+    naturally separated by blank lines, so each chunk ends up being one
+    coherent clause rather than a random fragment of text.
+    """
+    global _doc_chunks, _doc_sources, _vectorizer, _doc_vectors
+    if _doc_chunks is not None:
+        return
+
+    chunks, sources = [], []
+
+    for filename in os.listdir(DOCS_DIR):
+        if not filename.lower().endswith(".pdf"):
+            continue
+        path = os.path.join(DOCS_DIR, filename)
+        doc = pymupdf.open(path)
+        full_text = "".join(page.get_text() for page in doc)
+        doc.close()
+
+        raw_chunks = re.split(r"\n\s*\n", full_text)
+        for chunk in raw_chunks:
+            cleaned = " ".join(chunk.split())
+            if len(cleaned) > 40:  # skip near-empty fragments and bare headers
+                chunks.append(cleaned)
+                sources.append(filename)
+
+    if not chunks:
+        raise RuntimeError(
+            f"No PDF text found in '{DOCS_DIR}/'. Add policy PDFs there before using this tool."
+        )
+
+    _doc_chunks = chunks
+    _doc_sources = sources
+    _vectorizer = TfidfVectorizer(stop_words="english")
+    _doc_vectors = _vectorizer.fit_transform(chunks)
+
+
+def search_policy_documents(query: str, top_k: int = 3) -> dict:
+    """
+    Searches all PDF documents in docs/ (policy documents, annual reports)
+    and returns the most relevant real passages for a given question,
+    using TF-IDF similarity, a deterministic text-matching method, not a
+    generative one. No text is invented here, only real extracted
+    passages from real PDFs are returned, with a genuine relevance score.
+    """
+    _load_documents()
+
+    query_vec = _vectorizer.transform([query])
+    similarities = cosine_similarity(query_vec, _doc_vectors)[0]
+    top_indices = similarities.argsort()[::-1][:top_k]
+
+    results = []
+    for idx in top_indices:
+        if similarities[idx] > 0:  # skip completely irrelevant matches
+            results.append({
+                "source": _doc_sources[idx],
+                "text": _doc_chunks[idx],
+                "relevance_score": round(float(similarities[idx]), 3),
+            })
+
+    return {
+        "query": query,
+        "results_found": len(results),
+        "passages": results,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Quick self-test, run this file directly to sanity check everything
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("Testing run_query()...")
     result = run_query("SELECT COUNT(*) as total FROM loan_applications")
-    print(result)
+    print(result["records"])
 
     print("\nTesting detect_anomalies() on AMT_CREDIT...")
     anomalies = detect_anomalies("loan_applications", "AMT_CREDIT")
@@ -271,6 +414,12 @@ if __name__ == "__main__":
     print(f"Forecast: {forecast['forecast']}")
 
     print("\nTesting predict_default_risk()...")
-    sample_id = run_query("SELECT SK_ID_CURR FROM loan_applications LIMIT 1")[0]["SK_ID_CURR"]
+    sample_id = run_query("SELECT SK_ID_CURR FROM loan_applications LIMIT 1")["records"][0]["SK_ID_CURR"]
     risk = predict_default_risk(sample_id)
     print(risk)
+
+    print("\nTesting search_policy_documents()...")
+    doc_results = search_policy_documents("maximum loan to income ratio allowed")
+    print(f"Found {doc_results['results_found']} relevant passages")
+    for r in doc_results["passages"]:
+        print(f"  [{r['relevance_score']}] ({r['source']}) {r['text'][:100]}...")

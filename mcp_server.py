@@ -16,23 +16,44 @@ The agent (built in Step 4) will connect to this server as a client.
 from fastmcp import FastMCP
 from analytics import (
     run_query,
+    get_table_schema,
     detect_anomalies,
     segment_records,
     forecast_timeseries,
     predict_default_risk,
+    search_policy_documents,
 )
 
 mcp = FastMCP("EIOS")
 
 
 @mcp.tool()
-def query_database(sql: str) -> list:
+def get_schema(table: str) -> dict:
+    """
+    Returns the real column names and types for a table (loan_applications,
+    bureau_credit_history, or previous_applications). Call this before
+    writing a SQL query if you are not certain a column name exists,
+    guessing a wrong column name will cause the query to fail.
+    """
+    return get_table_schema(table)
+
+
+@mcp.tool()
+def query_database(sql: str) -> dict:
     """
     Executes a SQL query against the enterprise database and returns the
     results. Use this to look up specific records, counts, sums, or any
     other structured data question. Available tables: loan_applications,
     bureau_credit_history, previous_applications. All three can be joined
     on the column SK_ID_CURR.
+
+    IMPORTANT: Select only the specific columns you actually need, avoid
+    SELECT * especially when joining tables, since a single applicant can
+    have many bureau_credit_history or previous_applications records, and
+    a wide join can return an oversized result. Add a LIMIT clause for
+    any exploratory query. Large results will be automatically truncated,
+    with a note explaining this, prefer writing a narrower query instead
+    of relying on truncated data.
     """
     return run_query(sql)
 
@@ -81,6 +102,18 @@ def assess_default_risk(sk_id_curr: int) -> dict:
     a risk probability score and a category: Low, Medium, or High.
     """
     return predict_default_risk(sk_id_curr)
+
+
+@mcp.tool()
+def search_policies(query: str, top_k: int = 3) -> dict:
+    """
+    Searches the company's policy documents and reports for relevant
+    passages. Use this whenever a question requires checking a rule,
+    threshold, or requirement, such as whether something violates policy,
+    or when context from a report is needed. Returns real extracted
+    passages with a relevance score, does not generate or summarize text.
+    """
+    return search_policy_documents(query, top_k)
 
 
 if __name__ == "__main__":
