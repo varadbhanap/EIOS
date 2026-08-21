@@ -10,6 +10,4 @@ EIOS solves this by separating deterministic computation from AI reasoning, an a
 
 Piloted in the finance and credit-risk domain, built with an architecture designed to generalize beyond it.
 
-## Project Status
 
-Actively in development as a final-year B.E. major project, built by a four-person team.
