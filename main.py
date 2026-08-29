@@ -20,7 +20,7 @@ import os
 import time
 from datetime import datetime
 
-from agent import build_agent, ask
+from agent import connect_tools, ask
 
 LOG_DIR = "logs"
 
@@ -89,7 +89,7 @@ def log_interaction(log_path, question, answer, duration):
 
 async def main():
     print("Connecting to EIOS backend...")
-    agent = await build_agent()
+    raw_tools = await connect_tools()
     print_banner()
 
     log_path = start_session_log()
@@ -114,7 +114,7 @@ async def main():
 
         start = time.time()
         try:
-            answer = await ask(agent, question)
+            answer = await ask(raw_tools, question)
         except KeyboardInterrupt:
             print("\n[Cancelled] That question was interrupted. Session continues.")
             continue

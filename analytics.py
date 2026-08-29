@@ -153,13 +153,21 @@ def segment_records(columns: list[str], n_clusters: int = 4) -> dict:
     """
     Groups loan applicants into segments using K-Means clustering, based
     on whichever numeric columns you pass in (e.g. income, credit amount,
-    annuity). Returns the size and average profile of each segment.
+    annuity). Returns the size, average profile, and REAL per-segment
+    default rate of each segment, default rate is already computed here,
+    do not run a separate query to estimate it.
     """
     conn = get_connection()
     try:
         col_str = ", ".join(columns)
+        # TARGET is fetched alongside the clustering columns so a real
+        # per-segment default rate can be reported, but it is NOT used
+        # as a clustering feature below, using the real outcome to help
+        # decide the clusters would leak label information into what is
+        # supposed to be unsupervised segmentation, a real methodological
+        # error, not just a style choice
         df = pd.read_sql_query(
-            f"SELECT {col_str} FROM loan_applications", conn
+            f"SELECT {col_str}, TARGET FROM loan_applications", conn
         ).dropna()
     finally:
         conn.close()
@@ -181,7 +189,7 @@ def segment_records(columns: list[str], n_clusters: int = 4) -> dict:
     # for a handful of records) would otherwise dominate and distort
     # the clusters, even producing tiny single-record "clusters"
     scaler = StandardScaler()
-    scaled_values = scaler.fit_transform(df[columns])
+    scaled_values = scaler.fit_transform(df[columns])  # TARGET deliberately excluded here
 
     model = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     df["cluster"] = model.fit_predict(scaled_values)
@@ -193,6 +201,12 @@ def segment_records(columns: list[str], n_clusters: int = 4) -> dict:
         .to_dict(orient="index")
     )
     segment_sizes = df["cluster"].value_counts().to_dict()
+
+    # real per-segment default rate, computed here rather than left for
+    # the agent to approximate with a separate, less accurate query
+    default_rates = df.groupby("cluster")["TARGET"].mean().round(4).to_dict()
+    for cluster_id in segment_summary:
+        segment_summary[cluster_id]["default_rate"] = default_rates.get(cluster_id)
 
     return {
         "n_clusters": n_clusters,
@@ -408,6 +422,8 @@ if __name__ == "__main__":
     print("\nTesting segment_records()...")
     segments = segment_records(["AMT_INCOME_TOTAL", "AMT_CREDIT", "AMT_ANNUITY"])
     print(f"Segment sizes: {segments['segment_sizes']}")
+    for cluster_id, profile in segments["segment_profiles"].items():
+        print(f"  Cluster {cluster_id}: default_rate = {profile['default_rate']}")
 
     print("\nTesting forecast_timeseries()...")
     forecast = forecast_timeseries()

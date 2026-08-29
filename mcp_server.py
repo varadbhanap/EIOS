@@ -75,8 +75,11 @@ def segment_applicants(columns: list, n_clusters: int = 4) -> dict:
     Groups loan applicants into behavioral segments using K-Means
     clustering on the given numeric columns (for example income, credit
     amount, annuity). Use this when asked to segment, group, or profile
-    applicants. Returns segment sizes and the average profile of each
-    segment.
+    applicants. Returns segment sizes, the average profile of each
+    segment, AND the real default rate for each individual segment
+    (already computed here, correctly, per segment). Do not run a
+    separate query to estimate default rate for segments, use the
+    default_rate value already included in each segment's profile.
     """
     return segment_records(columns, n_clusters)
 
