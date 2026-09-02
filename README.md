@@ -1,6 +1,6 @@
-# EIOS — Enterprise Intelligence Operating System
+# EIOS: Enterprise Intelligence Operating System
 
-An MCP-powered multi-agent framework that answers business questions by combining an enterprise's structured databases with its unstructured policy documents, running real statistical and machine learning analysis, and producing a traceable, evidence-backed answer instead of a guess.
+An MCP powered multi-agent framework that answers business questions by combining an enterprise's structured databases with its unstructured policy documents, running real statistical and machine learning analysis, and producing a traceable, evidence-backed answer instead of a guess.
 
 ## About
 
